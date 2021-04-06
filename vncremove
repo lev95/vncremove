@@ -1,0 +1,202 @@
+#!/bin/sh
+#
+#  Copyright (C) 2002-2013 RealVNC Ltd.
+#
+
+#
+# vncinstall - install VNC programs, man pages, and create default PAM and 
+# vncserver configuration files and a default xstartup.
+#
+
+# Set up defaults and platform-specific overrides
+dst=/usr/local/bin
+lib=/usr/local/lib
+etcvnc=/etc/vnc
+mandst=/usr/local/man
+cupsdst=/usr/lib/cups
+share=/usr/share
+
+installSELinux=0
+
+SYSNAME=`uname -s`
+case "$SYSNAME" in
+    Linux)
+        dst=/usr/bin
+        lib=/usr/lib
+        mandst=/usr/share/man
+        installSELinux=1
+        ;;
+    SunOS)
+        PATH="/usr/xpg4/bin:$PATH"
+        export PATH
+        which() { ksh whence -p "$@"; }
+        ;;
+    HP-UX)
+        which() { command -v "$@"; }
+        ;;
+    AIX)
+        ;;
+    FreeBSD)
+        cupsdst=/usr/local/libexec/cups
+        lib=/usr/local/libexec
+        etcvnc=/usr/local/etc/vnc
+        share=/usr/local/share
+        ;;
+    *)
+        echo "Unknown platform"
+        exit 1
+        ;;
+esac
+
+if [ $# -gt 4 ]; then
+    echo "usage: $0 [<installation-directory> [<man-page-directory> [<cups-directory] ] ]"
+    exit 1
+fi
+
+# Installation directory
+if [ $# -gt 0 ]; then
+    dst=$1
+    shift
+    if [ "`basename $dst`" = bin ] && [ "$mandst" '!=' /usr/share/man ]; then
+        $mandst=`dirname "$dst"`/man
+    fi
+fi
+
+# Check installation directory exists
+if [ '!' -d "$dst" ]; then
+    echo "Installation directory $dst does not exist."
+    exit 1
+fi
+
+# Man page directories
+if [ $# -gt 0 ]; then
+    mandst="$1"
+    shift
+fi
+if [ '!' -d "$mandst" ] || [ '!' -w "$mandst" ]; then
+    echo "Can't install manual pages to $mandst"
+    mandst=""
+else
+    mandst="$mandst"/man1
+fi
+
+# CUPS directory
+if [ $# -gt 0 ]; then
+    cupsdst="$1"
+    shift
+fi
+
+# Copy files
+for f in vncviewer vncserver-x11 vncserver-x11-core Xvnc Xvnc-core \
+         vncserverui vncserver-virtual vncserver-virtuald \
+         vncserver-x11-serviced vncpasswd vnclicense vnclicensewiz \
+         vnclicensehelper vncpamhelper vncpipehelper vncinitconfig \
+         vncagent; do
+
+  if [ '!' -f $f ]; then
+      echo "Couldn't find $f"
+  else
+      if cmp -s $f "$dst"/$f; then
+          echo "Removing $f from $dst"
+          rm $dst/$f
+      fi
+
+      if [ -f $f.1 ]; then
+          if [ -n "$mandst" ]; then
+              if cmp -s $f.1 "$mandst"/$f.1; then
+                  echo "Removing $f.1"
+                  rm "$mandst"/$f.1
+              fi
+          fi
+      fi
+  fi
+
+done
+
+rm -f "$dst"/vncserver
+
+if [ "`id -u`" -ne 0 ]; then
+    echo "Some installation components require root access to install."
+    echo "Rerun `basename $0` as root to install properly."
+    exit 1
+fi
+
+# Create lib directory if it doesn't exist
+if [ '!' -d $lib/vnc ]; then
+  mkdir -p $lib/vnc
+  chmod 0755 $lib/vnc
+fi
+
+# Copy files to lib directory
+for f in get_primary_ip4 vncelevate vncservice registerSELinuxmodules; do
+  if [ '!' -f $f ]; then
+      echo "Couldn't find $f"
+  else
+      if cmp -s $f $lib/vnc/$f; then
+        echo "Removing $f from $lib/vnc"
+        rm $lib/vnc/$f
+      fi
+  fi
+
+done
+
+if [ -d $etcvnc ]; then
+  rm -R $etcvnc
+fi
+
+sharevnc=$share/vnc
+
+# Create shared user directory if it doesn't exist
+if [ -d $sharevnc ]; then
+  rm -R $sharevnc
+fi
+
+if [ -d $sharevnc/fonts ]; then
+  rm -R $sharevnc/fonts
+fi
+
+for f in icons/* ; do
+  filename=`basename $f`
+  rm -R "$share/icons/hicolor/48x48/apps/${filename}"
+done
+
+if which gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache --quiet "$share/icons/hicolor" || true
+fi
+
+applications=$share/applications
+mime=$share/mime/packages
+mimelnk=$share/mimelnk/application
+
+# Attempt to copy desktop and MIME files
+if [ -d $applications ]; then
+  for f in applications/* ; do
+    echo "Removing application file $f at $share" 
+    rm -R "$share/$f"
+  done
+fi
+
+if [ -d $mime ]; then
+  rm -R "$mime/realvnc-vnclicensehelper.xml"
+fi
+
+if [ -d $mimelnk ]; then
+  rm -R "$mimelnk/application/realvnc-vnclicensehelper-mime.desktop"
+fi
+
+if [ -x "`which update-mime-database 2>/dev/null`" ]; then
+	update-mime-database /usr/share/mime >/dev/null 2>&1
+fi
+
+if which update-desktop-database >/dev/null 2>&1 ; then
+  update-desktop-database -q
+fi
+
+cups_backend="$cupsdst"/backend
+cups_vnc="$cups_backend"/vnc
+
+rm -R "$cups_vnc"
+
+if [ "$installSELinux" -eq 1 ]; then
+  rm -R $share/selinux/packages/realvnc/
+fi
